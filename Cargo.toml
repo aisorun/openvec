@@ -1,0 +1,88 @@
+[workspace]
+members = [
+    "crates/openvec-core",
+    "crates/openvec-server",
+    "crates/openvec-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["OpenVec Contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/aisorun/openvec"
+homepage = "https://openvec.io"
+readme = "README.md"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+hyper = { version = "1", features = ["full"] }
+
+# gRPC
+tonic = "0.13"
+prost = "0.13"
+
+# Logging & tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Configuration
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+
+# Hashing
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# Random
+rand = "0.9"
+
+# Compression
+lz4_flex = "0.11"
+
+# Memory-mapped files
+memmap2 = "0.9"
+
+# Bytes
+bytes = "1"
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Parking lot (faster Mutex/RwLock)
+parking_lot = "0.12"
+
+# Crossbeam (lock-free data structures)
+crossbeam = "0.8"
+crossbeam-skiplist = "0.1"
+
+# Internal crates
+openvec-core = { path = "crates/openvec-core" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.bench]
+inherits = "release"
+debug = true

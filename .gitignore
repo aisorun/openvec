@@ -1,0 +1,46 @@
+# ==============================================================================
+# OpenVec Git Ignore Configurations
+# ==============================================================================
+
+# --- Rust Build & Target ---
+# Compiled files, temporary files, and build artifacts
+/target/
+
+# --- Local Databases & Data Stores (DO NOT COMMIT) ---
+# Local database and indices data directory for OpenVec
+/openvec_data/
+
+# Local Qdrant binary and its run storage (used for benchmarking)
+/qdrant
+/qdrant_run/
+
+# External Benchmark tool repo
+/vector-db-benchmark/
+
+# --- Excluded Project Documents (Local only) ---
+/docs/
+
+# --- Python Environment & Cache (For local benchmarking tools) ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+
+# --- macOS / OS System Files ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# --- IDEs & Editors ---
+# VS Code
+.vscode/
+# IntelliJ IDEA
+.idea/
+# Vim swap files
+*.swp
+*.swo

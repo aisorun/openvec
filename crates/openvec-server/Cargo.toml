@@ -1,0 +1,36 @@
+[package]
+name = "openvec-server"
+description = "OpenVec HTTP/gRPC server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "openvec-server"
+path = "src/main.rs"
+
+[dependencies]
+openvec-core.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+toml.workspace = true
+clap.workspace = true
+parking_lot.workspace = true
+tower.workspace = true
+anyhow.workspace = true
+tonic.workspace = true
+prost.workspace = true
+
+[build-dependencies]
+tonic-build = "0.13"
+prost-build = "0.13"
+
+[dev-dependencies]
+tempfile = "3"

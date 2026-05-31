@@ -1,0 +1,37 @@
+# OpenVec 向量数据库服务端配置文件示例
+
+[server]
+# 服务绑定的 IP 地址
+host = "127.0.0.1"
+
+# HTTP REST API 服务的监听端口
+port = 8000
+
+# Tonic gRPC 服务的监听端口
+grpc_port = 9000
+
+# 日志输出等级，可选: debug, info, warn, error
+log_level = "info"
+
+[storage]
+# 数据存储目录的路径
+data_dir = "./openvec_data"
+
+# 每次写入是否执行 fsync 强行落盘（安全度更高，但写入性能会下降）
+wal_sync = false
+
+# 是否对数据段 (Segments) 采用 LZ4 压缩进行持久化
+use_compression = true
+
+# 单个 Segment 数据段的最大大小限制 (字节数)，默认 10MB
+segment_max_size = 10485760
+
+[hnsw_defaults]
+# HNSW 每层节点的最大连接数 (M)，更大值带来更高召回率，但增加内存使用
+m = 16
+
+# HNSW 索引构建时的候选池大小 (ef_construction)，更大值提升索引连通质量但建索引变慢
+ef_construction = 100
+
+# HNSW 搜索时的候选池大小 (ef_search)
+ef_search = 50
