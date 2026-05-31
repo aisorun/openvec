@@ -2,6 +2,8 @@
 
 **下一代轻量级、零依赖、双模向量数据库** —— 致力于成为 AI 时代的 "SQLite"。
 
+🇺🇸 [English](README.md) | 🇨🇳 [简体中文](README_ZH.md)
+
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/aisorun/openvec/ci.yml?style=flat-square)](https://github.com/aisorun/openvec)

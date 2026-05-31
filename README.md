@@ -2,6 +2,8 @@
 
 **The next-generation lightweight, zero-dependency, dual-mode vector database** — Designed to be the "SQLite" of the AI era.
 
+🇺🇸 [English](README.md) | 🇨🇳 [简体中文](README_ZH.md)
+
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/aisorun/openvec/ci.yml?style=flat-square)](https://github.com/aisorun/openvec)
