@@ -177,6 +177,59 @@ To deliver high-precision hybrid search, dense semantic rankings (from HNSW or I
 
 ## 📦 Quick Start
 
+### 🚀 Quick Start from Source
+
+Get OpenVec up and running locally in under 3 minutes by cloning the source code, building the binaries, and running our automated demo script or using the CLI.
+
+> [!TIP]
+> For a comprehensive list of all compilation, running, testing, benchmarking, and Python binding commands, please refer to the [Common Commands Guide](docs/commands.md).
+
+
+#### 1. Clone the Repository
+```bash
+git clone https://github.com/aisorun/openvec.git
+cd openvec
+```
+
+#### 2. Build the Binaries
+Build the high-performance optimized release binaries:
+```bash
+cargo build --release
+```
+This compiles the server daemon (`openvec-server`) and the command line interface (`openvec`).
+
+#### 3. Start the Server
+Run the server daemon, which starts the HTTP REST API on port `8000` and the gRPC API on port `9000`:
+```bash
+./target/release/openvec-server --port 8000 --grpc-port 9000 --data-dir ./openvec_data
+```
+
+#### 4. Run the Automated Demo
+In another terminal, run our pre-packaged automated demo client. It will automatically check server health, create a collection, parse and ingest real technical sentences from `scripts/sample_data.txt`, perform hybrid search, and clean up:
+```bash
+python3 scripts/openvec_demo.py
+```
+
+#### 5. Manual Command Line Interaction (CLI)
+You can also interact with your local OpenVec instance directly using the built-in CLI:
+```bash
+# Create a new collection
+./target/release/openvec create my_collection --dim 4 --metric cosine
+
+# Insert a document with vector and scalar payload metadata
+./target/release/openvec insert my_collection \
+  --id "doc_rust" \
+  --vector "[0.12, 0.05, -0.22, 0.01]" \
+  --payload '{"content": "Rust is fast and secure", "author": "OpenVec"}'
+
+# Perform similarity search
+./target/release/openvec search my_collection \
+  --vector "[0.10, 0.04, -0.20, 0.01]" \
+  --limit 3
+```
+
+---
+
 ### 🦀 1. Embedded Mode (Rust SDK)
 
 Add `openvec-core` to your `Cargo.toml`:
@@ -288,8 +341,8 @@ openvec search tech_kb \
 ## 🗺️ Roadmap
 
 - [x] **Phase 1 (Completed)**: Core engine optimization — Native Rust embedded SDK, lock-free skip-list MemTable, WAL persistence, stable HNSW indexing.
-- [ ] **Phase 2 (Active)**: Lightweight Server Ecosystem — Axum HTTP server & Tonic gRPC API, Python bindings (`PyO3`), openvec-cli toolkit.
-- [ ] **Phase 3 (Active)**: Advanced Indexing & Quantization — Compressed IVF-SQ8 indices, Okapi BM25 full-text indexing, Weighted RRF fusion.
+- [x] **Phase 2 (Completed)**: Lightweight Server Ecosystem — Axum HTTP server & Tonic gRPC API, Python bindings (`PyO3`), openvec-cli toolkit.
+- [x] **Phase 3 (Completed)**: Advanced Indexing & Quantization — Compressed IVF-SQ8 indices, Okapi BM25 full-text indexing, Weighted RRF fusion.
 - [ ] **Phase 4**: Expanded Integrations — Go/TypeScript SDK bindings, official integrations with LangChain and LlamaIndex.
 - [ ] **Phase 5**: Production Readiness — Primary-secondary database replication, dynamic ACL authorization, WebAssembly client-side bundles.
 

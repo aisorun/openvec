@@ -3,6 +3,7 @@ members = [
     "crates/openvec-core",
     "crates/openvec-server",
     "crates/openvec-cli",
+    "crates/openvec-py",
 ]
 resolver = "2"
 

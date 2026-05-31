@@ -1,0 +1,20 @@
+Rust is a systems programming language focused on safety, speed, and concurrency.
+Vector databases are designed to store, index, and query high-dimensional vector embeddings efficiently.
+Retrieval Augmented Generation (RAG) improves Large Language Model responses by fetching relevant context documents.
+Okapi BM25 is a ranking function used by search engines to estimate the relevance of documents to a given search query.
+SIMD (Single Instruction, Multiple Data) allows modern modern CPUs to perform the same math operation on multiple data points simultaneously.
+HNSW is an approximate nearest neighbor algorithm that builds a multi-layer graph for fast similarity search.
+Quantization techniques like SQ8 compress 32-bit floating point vectors into 8-bit integers to save memory.
+Axum is an ergonomic and modular web application framework for the Rust ecosystem.
+Tonic is a gRPC over HTTP/2 implementation focused on high performance and interoperability.
+MemTable and Write-Ahead Logging (WAL) ensure both fast write operations and strong durability in storage engines.
+Cosine similarity is a measure of similarity between two non-zero vectors of an inner product space.
+SQLite is a library that implements a self-contained, serverless, zero-configuration, transactional SQL database engine.
+Rust 是一门专注于安全、速度和并发的系统级编程语言。
+向量数据库专为高效存储、索引和查询高维向量嵌入而设计。
+检索增强生成（RAG）通过获取相关的上下文文档，提高了大语言模型的回答质量。
+SIMD（单指令多数据）允许现代 CPU 同时对多个数据点执行相同的数学运算。
+OpenVec 是一款完全采用原生 Rust 开发的超轻量、高性能的双模向量数据库。
+双模运行意味着 OpenVec 既支持进程内嵌入式部署，也支持独立的 HTTP/gRPC 服务端模式。
+大语言模型（LLM）在理解复杂的自然语言任务方面展现出了惊人的能力。
+为了保证高效性，OpenVec 的底层的图检索和标量量化算法完全免除了堆内存分配。

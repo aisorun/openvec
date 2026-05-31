@@ -375,7 +375,7 @@ impl IvfSq8Inner {
         false
     }
 
-    fn search(&self, query: VectorRef, k: usize) -> Result<Vec<SearchResult>> {
+    fn search(&self, query: VectorRef, k: usize, n_probe_override: Option<usize>) -> Result<Vec<SearchResult>> {
         if query.len() != self.dimension {
             return Err(Error::DimensionMismatch {
                 expected: self.dimension,
@@ -424,6 +424,7 @@ impl IvfSq8Inner {
         };
 
         // Find n_probe nearest centroids to query vector
+        let effective_n_probe = n_probe_override.unwrap_or(self.n_probe);
         let mut centroid_dists: Vec<(f32, usize)> = self.centroids.iter()
             .enumerate()
             .map(|(idx, centroid)| {
@@ -433,7 +434,7 @@ impl IvfSq8Inner {
             .collect();
 
         centroid_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-        let probe_limit = self.n_probe.min(centroid_dists.len());
+        let probe_limit = effective_n_probe.min(centroid_dists.len());
 
         let mut candidates = Vec::new();
 
@@ -497,6 +498,20 @@ impl IvfSq8Index {
             dimension,
         }
     }
+
+    /// Creates a new IVF-SQ8 index with a custom n_probe value.
+    ///
+    /// `n_probe` controls how many inverted-file clusters are scanned during
+    /// search. Higher values increase recall at the cost of latency.
+    /// Default: 4. Reasonable range: 1 – n_centroids (16).
+    pub fn with_n_probe(dimension: usize, metric: DistanceMetric, n_probe: usize) -> Self {
+        let mut inner = IvfSq8Inner::new(dimension, metric);
+        inner.n_probe = n_probe;
+        Self {
+            inner: RwLock::new(inner),
+            dimension,
+        }
+    }
 }
 
 impl VectorIndex for IvfSq8Index {
@@ -508,8 +523,13 @@ impl VectorIndex for IvfSq8Index {
         Ok(self.inner.write().delete(id))
     }
 
-    fn search(&self, query: VectorRef, k: usize, _ef: Option<usize>) -> Result<Vec<SearchResult>> {
-        self.inner.read().search(query, k)
+    /// Search for k nearest neighbors.
+    ///
+    /// The `ef` parameter is reused as a **per-query `n_probe` override** for
+    /// IVF-SQ8. When `ef` is `Some(n)`, `n` clusters are probed instead of the
+    /// index-level default. Passing `None` uses the index-level default.
+    fn search(&self, query: VectorRef, k: usize, ef: Option<usize>) -> Result<Vec<SearchResult>> {
+        self.inner.read().search(query, k, ef)
     }
 
     fn len(&self) -> usize {

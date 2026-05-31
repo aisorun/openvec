@@ -177,6 +177,59 @@ OpenVec 在向量存储底层无缝内嵌了快速的 lowercase 分词倒排词�
 
 ## 📦 快速上手 (Quick Start)
 
+### 🚀 从源代码快速开始
+
+只需不到 3 分钟，即可通过克隆源代码、编译二进制文件并运行自动化 Demo 脚本或使用 CLI 来在本地启动并运行 OpenVec。
+
+> [!TIP]
+> 完整的编译、开发、测试与 Python 绑定常用命令，请参阅：[常用开发与运维命令指南](docs/commands.md)。
+
+
+#### 1. 克隆仓库
+```bash
+git clone https://github.com/aisorun/openvec.git
+cd openvec
+```
+
+#### 2. 编译二进制文件
+编译经过高性能优化的 Release 版本二进制程序：
+```bash
+cargo build --release
+```
+这会编译出服务端守护进程 (`openvec-server`) 以及命令行客户端工具 (`openvec`)。
+
+#### 3. 启动服务端
+运行服务端守护进程，默认在端口 `8000` 启动 HTTP REST API，在端口 `9000` 启动 gRPC API：
+```bash
+./target/release/openvec-server --port 8000 --grpc-port 9000 --data-dir ./openvec_data
+```
+
+#### 4. 运行自动化演示 (Demo)
+在另一个终端窗口中，运行我们预包装好的自动化 Demo 客户端。它会自动检查服务健康状态、创建集合、解析并导入 `scripts/sample_data.txt` 中的真实技术文档数据、执行高精度混合检索，最后清理测试环境：
+```bash
+python3 scripts/openvec_demo.py
+```
+
+#### 5. 命令行终端交互 (CLI)
+您也可以直接使用内置的 CLI 工具与本地的 OpenVec 实例进行手动交互：
+```bash
+# 创建一个新的 Collection
+./target/release/openvec create my_collection --dim 4 --metric cosine
+
+# 插入带向量和标量 payload 元数据属性的文档
+./target/release/openvec insert my_collection \
+  --id "doc_rust" \
+  --vector "[0.12, 0.05, -0.22, 0.01]" \
+  --payload '{"content": "Rust is fast and secure", "author": "OpenVec"}'
+
+# 执行相似度图检索
+./target/release/openvec search my_collection \
+  --vector "[0.10, 0.04, -0.20, 0.01]" \
+  --limit 3
+```
+
+---
+
 ### 🦀 1. 进程内嵌入式模式 (Rust SDK)
 
 在 `Cargo.toml` 中导入 `openvec-core`：
@@ -287,8 +340,8 @@ openvec search tech_kb \
 ## 🗺️ 路线图 (Roadmap)
 
 - [x] **Phase 1 (已完成)**：核心数据库引擎构建 —— 100% Rust 原生嵌入式 SDK、无锁 skip-list MemTable、Write-Ahead Log (WAL) 强原子性持久化、高精度 HNSW 图检索。
-- [ ] **Phase 2 (推进中)**：轻量级服务端生态 —— Axum HTTP / Tonic gRPC 极速服务端、基于 PyO3 的 Python 官方绑定 SDK、openvec-cli 工具箱。
-- [ ] **Phase 3 (推进中)**：前沿量化与多模态 —— IVF-SQ8 倒排量化索引、Okapi BM25 全文分词检索、内存加权 RRF 融合。
+- [x] **Phase 2 (已完成)**：轻量级服务端生态 —— Axum HTTP / Tonic gRPC 极速服务端、基于 PyO3 的 Python 官方绑定 SDK、openvec-cli 工具箱。
+- [x] **Phase 3 (已完成)**：前沿量化与多模态 —— IVF-SQ8 倒排量化索引、Okapi BM25 全文分词检索、内存加权 RRF 融合。
 - [ ] **Phase 4**：生态建设 —— Go / TypeScript 原生 SDK 绑定，无缝适配大模型框架 LangChain 及 LlamaIndex。
 - [ ] **Phase 5**：生产高可用保障 —— 经典主从（Primary-Secondary）复制拓扑、数据库用户 ACL 访问权限控制、面向前端运行的 WebAssembly 原生绑定。
 

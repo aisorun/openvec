@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use openvec_core::OpenVec;
-use openvec_core::types::{DistanceMetric, Document, DocumentId, ScalarValue, SearchRequest};
+use openvec_core::types::{DistanceMetric, Document, DocumentId, ScalarField, ScalarValue, Schema, SearchRequest, VectorField};
 
 /// OpenVec Command Line Interface
 #[derive(Parser, Debug)]
@@ -34,6 +34,10 @@ enum Commands {
         /// Distance metric (l2, cosine, dot)
         #[arg(short, long, value_enum, default_value_t = CliMetric::Cosine)]
         metric: CliMetric,
+
+        /// Optional full-text BM25 fields (can be specified multiple times, e.g. --fulltext-field content --fulltext-field title)
+        #[arg(long = "fulltext-field", value_name = "FIELD")]
+        fulltext_fields: Vec<String>,
     },
 
     /// Drop an existing collection
@@ -138,9 +142,24 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Commands::Create { name, dim, metric } => {
-            db.create_collection(&name, dim, metric.into())?;
-            println!("Successfully created collection '{}' with dimension {} ({} metric).", name, dim, DistanceMetric::from(metric));
+        Commands::Create { name, dim, metric, fulltext_fields } => {
+            if fulltext_fields.is_empty() {
+                db.create_collection(&name, dim, metric.into())?;
+                println!("Successfully created collection '{}' with dimension {} ({} metric).", name, dim, DistanceMetric::from(metric));
+            } else {
+                let mut schema = Schema::new().add_vector_field(
+                    VectorField::new("default", dim).with_distance(metric.into())
+                );
+                for field in &fulltext_fields {
+                    schema = schema.add_scalar_field(ScalarField::full_text(field));
+                }
+                db.create_collection_with_schema(&name, schema)?;
+                println!(
+                    "Successfully created collection '{}' with dimension {} ({} metric) and fulltext fields: [{}].",
+                    name, dim, DistanceMetric::from(metric),
+                    fulltext_fields.join(", ")
+                );
+            }
         }
         Commands::Drop { name } => {
             let dropped = db.drop_collection(&name)?;

@@ -1,0 +1,16 @@
+[package]
+name = "openvec-py"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "openvec_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module", "serde"] }
+openvec-core = { path = "../openvec-core" }
+serde.workspace = true
+serde_json.workspace = true
