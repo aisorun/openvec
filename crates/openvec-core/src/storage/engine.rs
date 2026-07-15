@@ -100,17 +100,18 @@ pub struct StorageEngine {
     data_dir: PathBuf,
     wal: WalWriter,
     memtable: MemTable,
-    segments: Vec<SegmentMeta>,
+    segments: Vec<SegmentReader>,
     next_segment_id: u64,
     flush_threshold: usize,
     /// Set of deleted doc_ids across all Segments (maintained in memory)
     segment_deleted: HashSet<String>,
     wal_sync: bool,
+    compress: bool,
 }
 
 impl StorageEngine {
     /// Opens collection storage (automatically creates directories and recovers from WAL)
-    pub fn open(data_dir: impl AsRef<Path>, collection_name: impl Into<String>, wal_sync: bool) -> Result<Self> {
+    pub fn open(data_dir: impl AsRef<Path>, collection_name: impl Into<String>, wal_sync: bool, compress: bool) -> Result<Self> {
         let collection_name = collection_name.into();
         let data_dir = data_dir.as_ref().to_path_buf();
 
@@ -122,9 +123,9 @@ impl StorageEngine {
 
         // Scan existing Segment files
         let mut segments = Self::scan_segments(&coll_dir)?;
-        segments.sort_by_key(|s| s.segment_id);
+        segments.sort_by_key(|s| s.header().segment_id);
 
-        let next_segment_id = segments.last().map(|s| s.segment_id + 1).unwrap_or(0);
+        let next_segment_id = segments.last().map(|s| s.header().segment_id + 1).unwrap_or(0);
 
         // Open WAL writer
         let wal_writer = WalWriter::open(&wal_path, wal_sync)?;
@@ -143,6 +144,7 @@ impl StorageEngine {
             flush_threshold: DEFAULT_MEMTABLE_FLUSH_THRESHOLD,
             segment_deleted: HashSet::new(),
             wal_sync,
+            compress,
         };
 
         // Apply WAL records (does not rewrite WAL, directly applies to MemTable)
@@ -157,7 +159,7 @@ impl StorageEngine {
     }
 
     /// Scans all Segment files in the directory
-    fn scan_segments(dir: &Path) -> Result<Vec<SegmentMeta>> {
+    fn scan_segments(dir: &Path) -> Result<Vec<SegmentReader>> {
         let mut segments = Vec::new();
         if !dir.exists() {
             return Ok(segments);
@@ -167,11 +169,7 @@ impl StorageEngine {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("seg") {
                 if let Ok(reader) = SegmentReader::open(&path) {
-                    segments.push(SegmentMeta {
-                        segment_id: reader.header().segment_id,
-                        path,
-                        doc_count: reader.doc_count(),
-                    });
+                    segments.push(reader);
                 }
             }
         }
@@ -267,15 +265,12 @@ impl StorageEngine {
         }
 
         // Check Segments (starting from the newest Segment)
-        for seg_meta in self.segments.iter().rev() {
-            let reader = SegmentReader::open(&seg_meta.path)?;
-            for doc in reader.read_all_documents()? {
-                if doc.id == *id {
-                    if !self.segment_deleted.contains(id.as_str()) {
-                        return Ok(Some(doc));
-                    }
-                    return Ok(None);
+        for reader in self.segments.iter().rev() {
+            if let Some(doc) = reader.read_document(id.as_str())? {
+                if !self.segment_deleted.contains(id.as_str()) {
+                    return Ok(Some(doc));
                 }
+                return Ok(None);
             }
         }
 
@@ -294,8 +289,7 @@ impl StorageEngine {
         }
 
         // Collect from Segments (older first, newer overrides)
-        for seg_meta in self.segments.iter() {
-            let reader = SegmentReader::open(&seg_meta.path)?;
+        for reader in self.segments.iter() {
             for doc in reader.read_all_documents()? {
                 if !seen.contains(&doc.id.0) && !self.segment_deleted.contains(&doc.id.0) {
                     seen.insert(doc.id.0.clone());
@@ -327,7 +321,7 @@ impl StorageEngine {
 
         // Write Segment
         let writer = SegmentWriter::new(&seg_path);
-        let meta = writer.write(segment_id, &doc_refs)?;
+        let meta = writer.write(segment_id, &doc_refs, self.compress)?;
 
         // Write WAL Flush record
         self.wal.append(&WalRecord::Flush {
@@ -335,10 +329,13 @@ impl StorageEngine {
             segment_id,
         })?;
 
+        // Open reader for the new segment and store it
+        let reader = SegmentReader::open(&seg_path)?;
+
         // Clear MemTable
         self.memtable.clear();
         self.next_segment_id += 1;
-        self.segments.push(meta.clone());
+        self.segments.push(reader);
 
         info!("Flushed segment_id={} with {} docs", segment_id, docs.len());
         Ok(Some(meta))
@@ -363,18 +360,23 @@ impl StorageEngine {
         let seg_path = self.data_dir.join(seg_filename);
 
         let writer = SegmentWriter::new(&seg_path);
-        let consolidated_meta = writer.write(segment_id, &doc_refs)?;
+        let _ = writer.write(segment_id, &doc_refs, self.compress)?;
 
         // 3. Remove old segment files
         let old_segments = std::mem::take(&mut self.segments);
         for old_seg in old_segments {
-            if old_seg.path.exists() {
-                let _ = std::fs::remove_file(&old_seg.path);
+            let path = self.data_dir.join(format!("{:08}.seg", old_seg.header().segment_id));
+            drop(old_seg); // Close the mmap and file handle
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
             }
         }
 
+        // Open reader for the new consolidated segment
+        let reader = SegmentReader::open(&seg_path)?;
+
         // 4. Update memory structures
-        self.segments = vec![consolidated_meta];
+        self.segments = vec![reader];
         self.next_segment_id += 1;
         self.segment_deleted.clear();
         self.memtable.clear();
@@ -411,7 +413,7 @@ impl StorageEngine {
     }
 
     pub fn total_doc_count(&self) -> usize {
-        let seg_count: usize = self.segments.iter().map(|s| s.doc_count).sum();
+        let seg_count: usize = self.segments.iter().map(|s| s.doc_count()).sum();
         self.memtable.doc_count() + seg_count
     }
 
@@ -434,7 +436,7 @@ mod tests {
     #[test]
     fn engine_insert_and_get() {
         let dir = tempdir().unwrap();
-        let mut engine = StorageEngine::open(dir.path(), "test_coll", true).unwrap();
+        let mut engine = StorageEngine::open(dir.path(), "test_coll", true, false).unwrap();
 
         engine.insert(make_doc("doc1")).unwrap();
         engine.insert(make_doc("doc2")).unwrap();
@@ -450,7 +452,7 @@ mod tests {
     #[test]
     fn engine_delete() {
         let dir = tempdir().unwrap();
-        let mut engine = StorageEngine::open(dir.path(), "test_coll", true).unwrap();
+        let mut engine = StorageEngine::open(dir.path(), "test_coll", true, false).unwrap();
 
         engine.insert(make_doc("doc1")).unwrap();
         engine.delete(&DocumentId::from("doc1")).unwrap();
@@ -462,7 +464,7 @@ mod tests {
     #[test]
     fn engine_flush_and_read() {
         let dir = tempdir().unwrap();
-        let mut engine = StorageEngine::open(dir.path(), "test_coll", true).unwrap();
+        let mut engine = StorageEngine::open(dir.path(), "test_coll", true, false).unwrap();
 
         for i in 0..5 {
             engine.insert(make_doc(&format!("doc{i}"))).unwrap();
@@ -484,14 +486,14 @@ mod tests {
 
         // Write data
         {
-            let mut engine = StorageEngine::open(dir.path(), "test_coll", true).unwrap();
+            let mut engine = StorageEngine::open(dir.path(), "test_coll", true, false).unwrap();
             engine.insert(make_doc("doc_recover")).unwrap();
             // No flush, simulate crash
         }
 
         // Reopen and recover from WAL
         {
-            let engine = StorageEngine::open(dir.path(), "test_coll", true).unwrap();
+            let engine = StorageEngine::open(dir.path(), "test_coll", true, false).unwrap();
             let doc = engine.get(&DocumentId::from("doc_recover")).unwrap();
             assert!(doc.is_some(), "WAL recovery should restore doc_recover");
         }

@@ -28,7 +28,7 @@ pub trait VectorIndex: Send + Sync {
     fn delete(&mut self, id: &DocumentId) -> Result<bool>;
 
     /// Top-K nearest neighbors search (approximate or exact, depending on implementation)
-    fn search(&self, query: VectorRef, k: usize, ef: Option<usize>) -> Result<Vec<SearchResult>>;
+    fn search(&self, query: VectorRef, k: usize, ef: Option<usize>, filter_fn: Option<&dyn Fn(&DocumentId) -> bool>) -> Result<Vec<SearchResult>>;
 
     /// Returns the number of active vectors in the index (excluding deleted ones)
     fn len(&self) -> usize;

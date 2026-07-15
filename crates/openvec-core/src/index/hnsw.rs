@@ -243,9 +243,6 @@ impl HnswInner {
         self.calc.compute(&self.nodes[node_id].vector, query)
     }
 
-    /// Performs greedy search at a specific layer to find `ef` nearest neighbor candidates
-    ///
-    /// Writes candidates into pre-allocated heaps passed by reference (zero dynamic allocation)
     fn search_layer(
         &self,
         query: VectorRef,
@@ -255,6 +252,7 @@ impl HnswInner {
         tracker: &mut VisitedTracker,
         candidates: &mut BinaryHeap<MinCandidate>,
         results: &mut BinaryHeap<Candidate>,
+        filter_fn: Option<&dyn Fn(&DocumentId) -> bool>,
     ) {
         candidates.clear();
         results.clear();
@@ -263,7 +261,15 @@ impl HnswInner {
 
         let entry_dist = self.dist_to_query(entry_node, query);
         candidates.push(MinCandidate { dist: entry_dist, id: entry_node });
-        results.push(Candidate { dist: entry_dist, id: entry_node });
+        
+        let is_entry_match = if let Some(ref f) = filter_fn {
+            f(&self.nodes[entry_node].doc_id)
+        } else {
+            true
+        };
+        if is_entry_match {
+            results.push(Candidate { dist: entry_dist, id: entry_node });
+        }
 
         while let Some(MinCandidate { dist: cur_dist, id: cur_id }) = candidates.pop() {
             // Stop expansion if current candidate is further than the furthest in the result set
@@ -284,18 +290,27 @@ impl HnswInner {
                         continue;
                     }
 
+                    let is_match = if let Some(ref f) = filter_fn {
+                        f(&self.nodes[neighbor_id].doc_id)
+                    } else {
+                        true
+                    };
+
                     let neighbor_dist = self.dist_to_query(neighbor_id, query);
 
-                    let should_add = results.len() < ef
+                    let should_explore = results.len() < ef
                         || results.peek().map_or(true, |w| neighbor_dist < w.dist);
 
-                    if should_add {
+                    if should_explore {
                         candidates.push(MinCandidate { dist: neighbor_dist, id: neighbor_id });
-                        results.push(Candidate { dist: neighbor_dist, id: neighbor_id });
+                        
+                        if is_match {
+                            results.push(Candidate { dist: neighbor_dist, id: neighbor_id });
 
-                        // Maintain result set size
-                        while results.len() > ef {
-                            results.pop();
+                            // Maintain result set size
+                            while results.len() > ef {
+                                results.pop();
+                            }
                         }
                     }
                 }
@@ -367,7 +382,7 @@ impl HnswInner {
 
         // Greedily descend from the highest level to insert_level + 1
         for level in (insert_level + 1..=current_max_level).rev() {
-            self.search_layer(&self.nodes[new_node_id].vector, entry_point, 1, level, &mut tracker, &mut candidates_heap, &mut results_heap);
+            self.search_layer(&self.nodes[new_node_id].vector, entry_point, 1, level, &mut tracker, &mut candidates_heap, &mut results_heap, None);
             if let Some(best) = results_heap.peek() {
                 entry_point = best.id;
             }
@@ -378,7 +393,7 @@ impl HnswInner {
             let m = if level == 0 { self.config.m_max0 } else { self.config.m };
             let ef = self.config.ef_construction;
 
-            self.search_layer(&self.nodes[new_node_id].vector, entry_point, ef, level, &mut tracker, &mut candidates_heap, &mut results_heap);
+            self.search_layer(&self.nodes[new_node_id].vector, entry_point, ef, level, &mut tracker, &mut candidates_heap, &mut results_heap, None);
             let selected = self.select_neighbors(&results_heap, m);
 
             // Set neighbors of the new node
@@ -439,7 +454,7 @@ impl HnswInner {
         false
     }
 
-    fn search(&self, query: VectorRef, k: usize, ef: usize) -> Result<Vec<SearchResult>> {
+    fn search(&self, query: VectorRef, k: usize, ef: usize, filter_fn: Option<&dyn Fn(&DocumentId) -> bool>) -> Result<Vec<SearchResult>> {
         if query.len() != self.config.dimension {
             return Err(Error::DimensionMismatch {
                 expected: self.config.dimension,
@@ -475,7 +490,7 @@ impl HnswInner {
 
         // Greedily descend from the highest level to level 1
         for level in (1..=self.max_level).rev() {
-            self.search_layer(&query_data, entry_point, 1, level, &mut tracker, &mut candidates_heap, &mut results_heap);
+            self.search_layer(&query_data, entry_point, 1, level, &mut tracker, &mut candidates_heap, &mut results_heap, filter_fn);
             if let Some(best) = results_heap.peek() {
                 entry_point = best.id;
             }
@@ -483,7 +498,7 @@ impl HnswInner {
 
         // Perform fine-grained search at level 0
         let ef_actual = ef.max(k);
-        self.search_layer(&query_data, entry_point, ef_actual, 0, &mut tracker, &mut candidates_heap, &mut results_heap);
+        self.search_layer(&query_data, entry_point, ef_actual, 0, &mut tracker, &mut candidates_heap, &mut results_heap, filter_fn);
 
         // Gather results (sorted by distance, take k)
         let mut results: Vec<(f32, usize)> = results_heap.into_iter()
@@ -538,9 +553,9 @@ impl VectorIndex for HnswIndex {
         Ok(self.inner.write().delete(id))
     }
 
-    fn search(&self, query: VectorRef, k: usize, ef: Option<usize>) -> Result<Vec<SearchResult>> {
+    fn search(&self, query: VectorRef, k: usize, ef: Option<usize>, filter_fn: Option<&dyn Fn(&DocumentId) -> bool>) -> Result<Vec<SearchResult>> {
         let ef = ef.unwrap_or(self.config.ef_search).max(k);
-        self.inner.read().search(query, k, ef)
+        self.inner.read().search(query, k, ef, filter_fn)
     }
 
     fn len(&self) -> usize {
@@ -616,7 +631,7 @@ mod tests {
         idx.insert(&make_id("b"), &[1.0, 0.0, 0.0, 0.0]).unwrap();
         idx.insert(&make_id("c"), &[10.0, 0.0, 0.0, 0.0]).unwrap();
 
-        let results = idx.search(&[0.1, 0.0, 0.0, 0.0], 2, None).unwrap();
+        let results = idx.search(&[0.1, 0.0, 0.0, 0.0], 2, None, None).unwrap();
         assert!(results.len() >= 1);
         assert_eq!(results[0].id.as_str(), "a");
     }
@@ -630,7 +645,7 @@ mod tests {
         idx.delete(&make_id("a")).unwrap();
         assert_eq!(idx.len(), 1);
 
-        let results = idx.search(&[0.0, 0.0], 2, None).unwrap();
+        let results = idx.search(&[0.0, 0.0], 2, None, None).unwrap();
         assert!(results.iter().all(|r| r.id.as_str() != "a"));
     }
 
@@ -665,10 +680,10 @@ mod tests {
         for _ in 0..n_queries {
             let query = random_vector(dim, &mut rng);
 
-            let hnsw_results: HashSet<String> = hnsw.search(&query, k, Some(100)).unwrap()
+            let hnsw_results: HashSet<String> = hnsw.search(&query, k, Some(100), None).unwrap()
                 .into_iter().map(|r| r.id.0).collect();
 
-            let flat_results: HashSet<String> = flat.search(&query, k, None).unwrap()
+            let flat_results: HashSet<String> = flat.search(&query, k, None, None).unwrap()
                 .into_iter().map(|r| r.id.0).collect();
 
             let intersection = hnsw_results.intersection(&flat_results).count();

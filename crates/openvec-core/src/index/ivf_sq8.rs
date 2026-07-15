@@ -280,6 +280,38 @@ impl IvfSq8Inner {
         Ok(())
     }
 
+    fn retrain(&mut self, raw_vectors: &[(&DocumentId, &[f32])]) -> Result<()> {
+        if raw_vectors.len() < self.n_centroids {
+            return Ok(());
+        }
+
+        let refs: Vec<&[f32]> = raw_vectors.iter().map(|(_, v)| *v).collect();
+
+        // 1. Re-train centroids
+        let centroids = train_kmeans(&refs, self.n_centroids, 15, &self.calc);
+        self.centroids = centroids;
+
+        // 2. Re-train quantizer mins/maxes
+        let quantizer = ScalarQuantizer::train(&refs, self.dimension);
+        self.quantizer = Some(quantizer);
+
+        // 3. Clear postings and mappings
+        self.postings = vec![Vec::new(); self.n_centroids];
+        self.doc_to_posting.clear();
+        self.active_count = 0;
+
+        // 4. Re-quantize and insert all vectors
+        for (doc_id, vec) in raw_vectors {
+            let mut vector_data = vec.to_vec();
+            if self.calc.metric() == DistanceMetric::Cosine {
+                crate::distance::normalize(&mut vector_data);
+            }
+            self.insert_quantized(doc_id, &vector_data)?;
+        }
+
+        Ok(())
+    }
+
     fn insert_quantized(&mut self, doc_id: &DocumentId, vector: &[f32]) -> Result<()> {
         let quantizer = self.quantizer.as_ref().unwrap();
 
@@ -375,7 +407,7 @@ impl IvfSq8Inner {
         false
     }
 
-    fn search(&self, query: VectorRef, k: usize, n_probe_override: Option<usize>) -> Result<Vec<SearchResult>> {
+    fn search(&self, query: VectorRef, k: usize, n_probe_override: Option<usize>, filter_fn: Option<&dyn Fn(&DocumentId) -> bool>) -> Result<Vec<SearchResult>> {
         if query.len() != self.dimension {
             return Err(Error::DimensionMismatch {
                 expected: self.dimension,
@@ -395,6 +427,13 @@ impl IvfSq8Inner {
         // 1. Cold start cache fallback search (Exact flat search)
         if self.quantizer.is_none() {
             let mut distances: Vec<(f32, &DocumentId)> = self.training_cache.iter()
+                .filter(|(id, _)| {
+                    if let Some(ref f) = filter_fn {
+                        f(id)
+                    } else {
+                        true
+                    }
+                })
                 .map(|(id, vec)| {
                     let d = self.calc.compute(&query_data, vec);
                     (d, id)
@@ -444,6 +483,12 @@ impl IvfSq8Inner {
             for (doc_id, qvec, norm_x, deleted) in &self.postings[c_idx] {
                 if *deleted {
                     continue;
+                }
+
+                if let Some(ref f) = filter_fn {
+                    if !f(doc_id) {
+                        continue;
+                    }
                 }
 
                 // SOTA Asymmetric Distance Computation via LUT lookups (zero heap allocations or floats math)
@@ -512,6 +557,14 @@ impl IvfSq8Index {
             dimension,
         }
     }
+
+    pub fn set_training_threshold(&mut self, threshold: usize) {
+        self.inner.write().training_threshold = threshold;
+    }
+
+    pub fn retrain(&self, raw_vectors: &[(&DocumentId, &[f32])]) -> Result<()> {
+        self.inner.write().retrain(raw_vectors)
+    }
 }
 
 impl VectorIndex for IvfSq8Index {
@@ -528,8 +581,8 @@ impl VectorIndex for IvfSq8Index {
     /// The `ef` parameter is reused as a **per-query `n_probe` override** for
     /// IVF-SQ8. When `ef` is `Some(n)`, `n` clusters are probed instead of the
     /// index-level default. Passing `None` uses the index-level default.
-    fn search(&self, query: VectorRef, k: usize, ef: Option<usize>) -> Result<Vec<SearchResult>> {
-        self.inner.read().search(query, k, ef)
+    fn search(&self, query: VectorRef, k: usize, ef: Option<usize>, filter_fn: Option<&dyn Fn(&DocumentId) -> bool>) -> Result<Vec<SearchResult>> {
+        self.inner.read().search(query, k, ef, filter_fn)
     }
 
     fn len(&self) -> usize {
@@ -632,7 +685,7 @@ mod tests {
         assert_eq!(idx.len(), 3);
         assert_eq!(idx.inner.read().quantizer.is_none(), true); // still in fallback
 
-        let res = idx.search(&[0.1, 0.0], 2, None).unwrap();
+        let res = idx.search(&[0.1, 0.0], 2, None, None).unwrap();
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].id.as_str(), "a");
         assert_eq!(res[1].id.as_str(), "b");
@@ -648,7 +701,7 @@ mod tests {
         assert_eq!(idx.inner.read().centroids.len(), 16);
 
         // Verify searches still yield top ranks
-        let res = idx.search(&[0.11, 0.11], 2, None).unwrap();
+        let res = idx.search(&[0.11, 0.11], 2, None, None).unwrap();
         assert_eq!(res[0].id.as_str(), "doc_1");
     }
 
@@ -731,5 +784,45 @@ mod tests {
         assert!(group_a, "Centroids missed Group A");
         assert!(group_b, "Centroids missed Group B");
         assert!(group_c, "Centroids missed Group C");
+    }
+
+    #[test]
+    fn test_ivf_sq8_retrain() {
+        let mut idx = IvfSq8Index::new(2, DistanceMetric::L2);
+        idx.set_training_threshold(16);
+        
+        for i in 0..16 {
+            let val = i as f32 * 0.1;
+            idx.insert(&make_id(&format!("doc_{i}")), &[val, val]).unwrap();
+        }
+        
+        // Trained now
+        assert!(idx.inner.read().quantizer.is_some());
+        
+        // Retrain with new vectors
+        let new_docs = vec![
+            (make_id("e"), vec![10.0, 10.0]),
+            (make_id("f"), vec![11.0, 10.0]),
+            (make_id("g"), vec![10.0, 11.0]),
+            (make_id("h"), vec![11.0, 11.0]),
+            (make_id("i"), vec![12.0, 12.0]),
+            (make_id("j"), vec![13.0, 12.0]),
+            (make_id("k"), vec![12.0, 13.0]),
+            (make_id("l"), vec![13.0, 13.0]),
+            (make_id("m"), vec![14.0, 14.0]),
+            (make_id("n"), vec![15.0, 14.0]),
+            (make_id("o"), vec![14.0, 15.0]),
+            (make_id("p"), vec![15.0, 15.0]),
+            (make_id("q"), vec![16.0, 16.0]),
+            (make_id("r"), vec![17.0, 16.0]),
+            (make_id("s"), vec![16.0, 17.0]),
+            (make_id("t"), vec![17.0, 17.0]),
+        ];
+        let refs: Vec<(&DocumentId, &[f32])> = new_docs.iter().map(|(id, v)| (id, v.as_slice())).collect();
+        idx.retrain(&refs).unwrap();
+        
+        // Search should now find vectors in the new range
+        let res = idx.search(&[10.1, 10.1], 1, None, None).unwrap();
+        assert_eq!(res[0].id.as_str(), "e");
     }
 }

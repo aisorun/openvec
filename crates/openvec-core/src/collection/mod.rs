@@ -38,6 +38,10 @@ pub struct CollectionConfig {
     pub prefer_sq8: bool,
     /// Whether to enforce fsync on WAL write operations
     pub wal_sync: bool,
+    /// Custom training threshold for IVF-SQ8 index
+    pub ivf_sq8_training_threshold: Option<usize>,
+    /// Whether to compress documents on disk using LZ4
+    pub compress: bool,
 }
 
 impl CollectionConfig {
@@ -48,6 +52,8 @@ impl CollectionConfig {
             auto_index_threshold: 10_000,
             prefer_sq8: false,
             wal_sync: false,
+            ivf_sq8_training_threshold: None,
+            compress: false,
         }
     }
 
@@ -66,6 +72,16 @@ impl CollectionConfig {
 
     pub fn with_wal_sync(mut self, wal_sync: bool) -> Self {
         self.wal_sync = wal_sync;
+        self
+    }
+
+    pub fn with_ivf_sq8_training_threshold(mut self, threshold: usize) -> Self {
+        self.ivf_sq8_training_threshold = Some(threshold);
+        self
+    }
+
+    pub fn with_compress(mut self, compress: bool) -> Self {
+        self.compress = compress;
         self
     }
 }
@@ -175,16 +191,21 @@ impl CollectionInner {
             let bytes = idx.serialize_to_bytes()?;
             serialized.insert(name.clone(), bytes);
         }
-        
+
+        // Serialize and save full-text inverted index as well
+        if let Ok(ft_bytes) = self.fulltext_index.serialize_to_bytes() {
+            serialized.insert("_fulltext".to_string(), ft_bytes);
+        }
+
         let bytes = serde_json::to_vec(&serialized)
             .map_err(|e| Error::Serialization(e.to_string()))?;
-            
+
         let index_path = self.storage.data_dir().join("index_default.json");
         let tmp_path = index_path.with_extension("json.tmp");
-        
+
         std::fs::write(&tmp_path, &bytes)?;
         std::fs::rename(&tmp_path, &index_path)?;
-        
+
         debug!("Saved collection indexes to '{}'", index_path.display());
         Ok(())
     }
@@ -263,6 +284,9 @@ impl CollectionInner {
             .ok_or_else(|| Error::VectorFieldNotFound(field_name.to_string()))?;
 
         let mut new_idx = IvfSq8Index::new(vf.dimension, vf.distance);
+        if let Some(threshold) = config.ivf_sq8_training_threshold {
+            new_idx.set_training_threshold(threshold);
+        }
 
         // Rebuild IVF-SQ8 index from storage
         let docs = self.storage.all_documents()?;
@@ -287,20 +311,25 @@ impl Collection {
     /// Creates or opens a collection
     pub fn open(data_dir: impl AsRef<Path>, config: CollectionConfig) -> Result<Self> {
         let name = config.name.clone();
-        let storage = StorageEngine::open(data_dir.as_ref(), &name, config.wal_sync)?;
+        let storage = StorageEngine::open(data_dir.as_ref(), &name, config.wal_sync, config.compress)?;
 
         // Try to load index from disk first
         let mut indexes = HashMap::new();
         let mut loaded_indexes = false;
-        
+        let mut fulltext_index = InvertedIndex::new();
+
         let index_path = storage.data_dir().join("index_default.json");
-        
+
         if index_path.exists() {
             if let Ok(bytes) = std::fs::read(&index_path) {
                 if let Ok(serialized_indexes) = serde_json::from_slice::<HashMap<String, Vec<u8>>>(&bytes) {
                     let mut temp_indexes = HashMap::new();
                     let mut success = true;
                     for (field_name, index_bytes) in serialized_indexes {
+                        if field_name == "_fulltext" {
+                            let _ = fulltext_index.deserialize_from_bytes(&index_bytes);
+                            continue;
+                        }
                         if let Ok(idx) = AdaptiveIndex::deserialize_from_bytes(&index_bytes) {
                             temp_indexes.insert(field_name, idx);
                         } else {
@@ -327,7 +356,7 @@ impl Collection {
         let mut inner = CollectionInner {
             storage,
             indexes,
-            fulltext_index: InvertedIndex::new(),
+            fulltext_index,
         };
 
         if !loaded_indexes {
@@ -350,13 +379,16 @@ impl Collection {
                 inner.fulltext_index.delete(del_id);
             }
             
-            // Rebuild fulltext index from all active documents (as it is strictly in-memory)
-            let all_docs = inner.storage.all_documents()?;
-            for doc in &all_docs {
-                for sf in &config.schema.scalar_fields {
-                    if sf.field_type == ScalarFieldType::FullText {
-                        if let Some(ScalarValue::Text(val)) = doc.payload.get(&sf.name) {
-                            inner.fulltext_index.insert(&doc.id, val);
+            // Rebuild fulltext index from all active documents if it wasn't loaded from disk
+            let has_fulltext_fields = config.schema.scalar_fields.iter().any(|sf| sf.field_type == ScalarFieldType::FullText);
+            if inner.fulltext_index.is_empty() && has_fulltext_fields {
+                let all_docs = inner.storage.all_documents()?;
+                for doc in &all_docs {
+                    for sf in &config.schema.scalar_fields {
+                        if sf.field_type == ScalarFieldType::FullText {
+                            if let Some(ScalarValue::Text(val)) = doc.payload.get(&sf.name) {
+                                inner.fulltext_index.insert(&doc.id, val);
+                            }
                         }
                     }
                 }
@@ -451,10 +483,26 @@ impl Collection {
             (request.limit, None)
         };
 
+        // Create the pre-filter closure
+        let check_match;
+        let filter_fn = if let Some(ref f) = request.filter {
+            let storage = &inner.storage;
+            check_match = move |id: &DocumentId| -> bool {
+                if let Ok(Some(doc)) = storage.get(id) {
+                    f.matches(&doc)
+                } else {
+                    false
+                }
+            };
+            Some(&check_match as &dyn Fn(&DocumentId) -> bool)
+        } else {
+            None
+        };
+
         // 1. Perform retrieval (Hybrid RRF fusion or pure vector search)
         let mut results = if let Some(ref h_query) = request.hybrid_query {
             // Retrieve vector neighbors (over-sample slightly to ensure clean RRF ranks overlap)
-            let vec_results = idx.as_trait().search(&request.vector, k_search.max(50), request.ef)?;
+            let vec_results = idx.as_trait().search(&request.vector, k_search.max(50), request.ef, filter_fn)?;
             // Retrieve BM25 text query matches
             let text_results = inner.fulltext_index.search(h_query, k_search.max(50));
             // Reciprocal Rank Fusion with weights
@@ -463,7 +511,7 @@ impl Collection {
             crate::db::hybrid::fuse_rrf_weighted(vec_results, text_results, v_weight, t_weight, k_search)
         } else {
             // Pure vector search
-            idx.as_trait().search(&request.vector, k_search, request.ef)?
+            idx.as_trait().search(&request.vector, k_search, request.ef, filter_fn)?
         };
 
         // 2. Apply metadata pre-filters if requested
@@ -666,5 +714,45 @@ mod tests {
         // doc_2 should be purged completely, doc_3 should be closest to [0, 1]
         assert_eq!(results[0].id.as_str(), "doc_3");
         assert!(!results.iter().any(|r| r.id.as_str() == "doc_2"));
+    }
+
+    #[test]
+    fn test_collection_pre_filtering() {
+        let dir = tempdir().unwrap();
+        let schema = Schema::new()
+            .add_vector_field(VectorField::new("default", 2).with_distance(DistanceMetric::L2))
+            .add_scalar_field(ScalarField::int("year"))
+            .add_scalar_field(ScalarField::text("category"));
+
+        let config = CollectionConfig::new("pre_filter_test", schema);
+        let coll = Collection::open(dir.path(), config).unwrap();
+
+        // Insert docs with metadata
+        coll.insert(Document::new("doc1", vec![0.0, 0.0])
+            .with_payload("year", 2020i64)
+            .with_payload("category", "A")).unwrap();
+        coll.insert(Document::new("doc2", vec![1.0, 0.0])
+            .with_payload("year", 2024i64)
+            .with_payload("category", "A")).unwrap();
+        coll.insert(Document::new("doc3", vec![2.0, 0.0])
+            .with_payload("year", 2024i64)
+            .with_payload("category", "B")).unwrap();
+
+        // Search for closest to [0, 0] with filter: year == 2024 and category == "A"
+        use crate::types::{Filter, FilterCondition};
+        let cond_year = FilterCondition::eq("year", 2024i64);
+        let cond_cat = FilterCondition::eq("category", "A");
+        
+        let filter = Filter::And(vec![
+            Filter::Condition(cond_year),
+            Filter::Condition(cond_cat),
+        ]);
+
+        let req = SearchRequest::new(vec![0.1, 0.0], 2).with_filter(filter);
+        let results = coll.search(&req).unwrap();
+
+        // Should return only "doc2" since it matches the filter and is closest
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id.as_str(), "doc2");
     }
 }

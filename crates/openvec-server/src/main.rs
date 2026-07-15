@@ -92,7 +92,9 @@ async fn main() -> anyhow::Result<()> {
     info!("Storage directory: {}", config.storage.data_dir);
 
     // Open/Initialize the database
-    let db = OpenVec::open(&config.storage.data_dir)?.with_wal_sync(config.storage.wal_sync);
+    let db = OpenVec::open(&config.storage.data_dir)?
+        .with_wal_sync(config.storage.wal_sync)
+        .with_compress(config.storage.use_compression);
     for name in db.list_collections() {
         if let Err(e) = db.get_collection(&name) {
             warn!("Failed to preload collection '{}': {}", name, e);

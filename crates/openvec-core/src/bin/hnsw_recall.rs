@@ -62,7 +62,7 @@ fn main() {
     println!("\n预计算 Ground Truth 中...");
     let mut ground_truths: Vec<HashSet<String>> = Vec::new();
     for q in &queries {
-        let flat_results: HashSet<String> = flat.search(q, k, None).unwrap()
+        let flat_results: HashSet<String> = flat.search(q, k, None, None).unwrap()
             .into_iter()
             .map(|r| r.id.0)
             .collect();
@@ -81,7 +81,7 @@ fn main() {
         let search_start = Instant::now();
 
         for (q, gt) in queries.iter().zip(&ground_truths) {
-            let hnsw_results: HashSet<String> = hnsw.search(q, k, Some(ef)).unwrap()
+            let hnsw_results: HashSet<String> = hnsw.search(q, k, Some(ef), None).unwrap()
                 .into_iter()
                 .map(|r| r.id.0)
                 .collect();

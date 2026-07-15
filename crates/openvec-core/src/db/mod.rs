@@ -58,6 +58,7 @@ pub struct OpenVec {
     /// Opened collections (loaded on demand)
     collections: parking_lot::RwLock<HashMap<String, Arc<Collection>>>,
     wal_sync: bool,
+    compress: bool,
 }
 
 impl OpenVec {
@@ -88,12 +89,19 @@ impl OpenVec {
             meta: parking_lot::RwLock::new(meta),
             collections: parking_lot::RwLock::new(HashMap::new()),
             wal_sync: false,
+            compress: false,
         })
     }
 
     /// Set WAL sync policy (forces fsync on WAL append if true)
     pub fn with_wal_sync(mut self, wal_sync: bool) -> Self {
         self.wal_sync = wal_sync;
+        self
+    }
+
+    /// Set document compression policy (compresses documents using LZ4 on disk if true)
+    pub fn with_compress(mut self, compress: bool) -> Self {
+        self.compress = compress;
         self
     }
 
@@ -142,7 +150,9 @@ impl OpenVec {
             self.save_meta(&meta)?;
         }
 
-        let config = CollectionConfig::new(name.clone(), schema).with_wal_sync(self.wal_sync);
+        let config = CollectionConfig::new(name.clone(), schema)
+            .with_wal_sync(self.wal_sync)
+            .with_compress(self.compress);
         let coll = Arc::new(Collection::open(&self.data_dir, config)?);
         
         {
@@ -181,7 +191,9 @@ impl OpenVec {
             self.save_meta(&meta)?;
         }
 
-        let config = CollectionConfig::new(name.clone(), schema).with_wal_sync(self.wal_sync);
+        let config = CollectionConfig::new(name.clone(), schema)
+            .with_wal_sync(self.wal_sync)
+            .with_compress(self.compress);
         let coll = Arc::new(Collection::open(&self.data_dir, config)?);
         
         {
@@ -220,7 +232,9 @@ impl OpenVec {
             meta.collections.get(name).cloned().unwrap()
         };
 
-        let config = CollectionConfig::new(coll_meta.name.clone(), coll_meta.schema).with_wal_sync(self.wal_sync);
+        let config = CollectionConfig::new(coll_meta.name.clone(), coll_meta.schema)
+            .with_wal_sync(self.wal_sync)
+            .with_compress(self.compress);
         let coll = Arc::new(Collection::open(&self.data_dir, config)?);
         cols.insert(name.to_string(), coll.clone());
 

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 use crate::types::DocumentId;
 
 /// Inverted Index with BM25 (Okapi) scoring
+#[derive(Serialize, Deserialize)]
 pub struct InvertedIndex {
     // term -> list of (doc_id_str, term_frequency)
     postings: HashMap<String, Vec<(String, u32)>>,
@@ -21,6 +23,18 @@ impl InvertedIndex {
             total_length: 0,
             num_docs: 0,
         }
+    }
+
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, crate::types::error::Error> {
+        serde_json::to_vec(self)
+            .map_err(|e| crate::types::error::Error::Serialization(e.to_string()))
+    }
+
+    pub fn deserialize_from_bytes(&mut self, bytes: &[u8]) -> Result<(), crate::types::error::Error> {
+        let deserialized: Self = serde_json::from_slice(bytes)
+            .map_err(|e| crate::types::error::Error::Deserialization(e.to_string()))?;
+        *self = deserialized;
+        Ok(())
     }
 
     /// Inserts (or updates) a document's full-text field

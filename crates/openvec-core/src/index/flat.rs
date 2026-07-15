@@ -94,7 +94,7 @@ impl FlatIndexInner {
         false
     }
 
-    fn search(&self, query: VectorRef, k: usize) -> Result<Vec<SearchResult>> {
+    fn search(&self, query: VectorRef, k: usize, filter_fn: Option<&dyn Fn(&DocumentId) -> bool>) -> Result<Vec<SearchResult>> {
         if query.len() != self.dimension {
             return Err(Error::DimensionMismatch {
                 expected: self.dimension,
@@ -111,10 +111,17 @@ impl FlatIndexInner {
             crate::distance::normalize(&mut query_data);
         }
 
-        // Compute distances to all vectors, skipping deleted ones
+        // Compute distances to all vectors, skipping deleted and filtered ones
         let mut distances: Vec<(f32, usize)> = self.entries.iter()
             .enumerate()
             .filter(|(_, e)| !e.deleted)
+            .filter(|(_, e)| {
+                if let Some(ref f) = filter_fn {
+                    f(&e.id)
+                } else {
+                    true
+                }
+            })
             .map(|(i, e)| {
                 let dist = self.calc.compute(&query_data, &e.vector);
                 (dist, i)
@@ -165,8 +172,8 @@ impl VectorIndex for FlatIndex {
         Ok(self.inner.write().delete(id))
     }
 
-    fn search(&self, query: VectorRef, k: usize, _ef: Option<usize>) -> Result<Vec<SearchResult>> {
-        self.inner.read().search(query, k)
+    fn search(&self, query: VectorRef, k: usize, _ef: Option<usize>, filter_fn: Option<&dyn Fn(&DocumentId) -> bool>) -> Result<Vec<SearchResult>> {
+        self.inner.read().search(query, k, filter_fn)
     }
 
     fn len(&self) -> usize {
@@ -231,7 +238,7 @@ mod tests {
         idx.insert(&make_id("b"), &[1.0, 0.0]).unwrap();
         idx.insert(&make_id("c"), &[5.0, 0.0]).unwrap();
 
-        let results = idx.search(&[0.1, 0.0], 2, None).unwrap();
+        let results = idx.search(&[0.1, 0.0], 2, None, None).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].id.as_str(), "a");
         assert_eq!(results[1].id.as_str(), "b");
@@ -246,7 +253,7 @@ mod tests {
         idx.delete(&make_id("a")).unwrap();
         assert_eq!(idx.len(), 1);
 
-        let results = idx.search(&[0.0, 0.0], 2, None).unwrap();
+        let results = idx.search(&[0.0, 0.0], 2, None, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id.as_str(), "b");
     }
@@ -266,7 +273,7 @@ mod tests {
         idx.insert(&make_id("a"), &[0.0, 0.0]).unwrap();
         assert_eq!(idx.len(), 1);
 
-        let results = idx.search(&[0.0, 0.0], 1, None).unwrap();
+        let results = idx.search(&[0.0, 0.0], 1, None, None).unwrap();
         assert!((results[0].score).abs() < 1e-5);
     }
 
@@ -277,7 +284,7 @@ mod tests {
         idx.insert(&make_id("ortho"), &[0.0, 1.0]).unwrap();
         idx.insert(&make_id("opp"), &[-1.0, 0.0]).unwrap();
 
-        let results = idx.search(&[1.0, 0.0], 3, None).unwrap();
+        let results = idx.search(&[1.0, 0.0], 3, None, None).unwrap();
         assert_eq!(results[0].id.as_str(), "same");
         assert_eq!(results[2].id.as_str(), "opp");
     }
@@ -286,7 +293,7 @@ mod tests {
     fn flat_k_larger_than_size() {
         let mut idx = FlatIndex::new(2, DistanceMetric::L2);
         idx.insert(&make_id("a"), &[0.0, 0.0]).unwrap();
-        let results = idx.search(&[0.0, 0.0], 100, None).unwrap();
+        let results = idx.search(&[0.0, 0.0], 100, None, None).unwrap();
         assert_eq!(results.len(), 1);
     }
 }
